@@ -134,6 +134,9 @@ const I18N = {
 
     'login.title': 'Log in to the demo',
     'login.sub': 'Pick a company registered in this browser to continue as. Useful for switching roles live during a demo.',
+    'login.subDemo': 'Step into any demo company — every role already has live requests, offers, contracts and shipments — or continue as a company you registered in this browser.',
+    'login.yours': 'Your companies',
+    'login.demo': 'Demo companies',
     'login.continue': 'Continue',
     'login.empty': 'No companies registered in this browser yet.',
     'login.new': 'New here?',
@@ -170,6 +173,7 @@ const I18N = {
     'th.route': 'Route',
     'th.cargo': 'Cargo',
     'th.service': 'Incoterms',
+    'th.serviceLevel': 'Service level',
     'th.status': 'Status',
     'th.offers': 'Offers',
     'th.weightVol': 'Weight / Vol',
@@ -602,6 +606,9 @@ const I18N = {
 
     'login.title': 'Вход в демо',
     'login.sub': 'Выберите компанию, зарегистрированную в этом браузере. Так удобно переключаться между ролями во время показа.',
+    'login.subDemo': 'Войдите от имени любой демо-компании — у каждой роли уже есть заявки, предложения, контракты и перевозки — или от имени компании, зарегистрированной в этом браузере.',
+    'login.yours': 'Ваши компании',
+    'login.demo': 'Демо-компании',
     'login.continue': 'Продолжить',
     'login.empty': 'В этом браузере пока нет зарегистрированных компаний.',
     'login.new': 'Впервые здесь?',
@@ -638,6 +645,7 @@ const I18N = {
     'th.route': 'Маршрут',
     'th.cargo': 'Груз',
     'th.service': 'Инкотермс',
+    'th.serviceLevel': 'Уровень сервиса',
     'th.status': 'Статус',
     'th.offers': 'Предложения',
     'th.weightVol': 'Вес / объём',
@@ -990,6 +998,7 @@ function t(key, params) {
       const v = params[k];
       if (v === undefined || v === null) return m;
       if (typeof v === 'object' && v.__html !== undefined) return v.__html;
+      if (typeof v === 'number') return esc(v.toLocaleString(locale()));
       return esc(String(v));
     });
   }

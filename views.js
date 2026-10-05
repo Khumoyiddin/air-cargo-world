@@ -37,7 +37,7 @@ function myCapacity(){ return Cache.capacity.filter(c=>c.ownerId===me().id).sort
 // Active listings whose one-off departure hasn't passed yet.
 function marketCapacity(){ return Cache.capacity.filter(c=>c.status==='active' && !(c.departAt && c.departAt < Date.now())).sort((a,b)=>b.createdAt-a.createdAt); }
 function myCargoRequests(){ return Cache.cargoRequests.filter(r=>r.ownerId===me().id).sort((a,b)=>b.createdAt-a.createdAt); }
-function openMarketCargo(){ const u = me(); return Cache.cargoRequests.filter(r=>r.status==='open' && (!u || r.ownerId!==u.id)); }
+function openMarketCargo(){ const u = me(); return Cache.cargoRequests.filter(r=>r.status==='open' && (!u || r.ownerId!==u.id)).sort((a,b)=>b.createdAt-a.createdAt); }
 function offersFor(requestId, requestType){ return Cache.offers.filter(o=>o.requestId===requestId && o.requestType===requestType); }
 function myOffers(){ return Cache.offers.filter(o=>o.providerId===me().id); }
 function myCharterRequests(){ return Cache.charterRequests.filter(r=>r.ownerId===me().id).sort((a,b)=>b.createdAt-a.createdAt); }
@@ -293,23 +293,30 @@ function renderRegister(){
 }
 
 function renderLoginPage(){
-  const companies = Cache.users.filter(u=>!u.seed).sort((a,b)=>b.createdAt-a.createdAt);
-  return `<div class="auth-wrap"><div class="auth-card">
+  const mine = Cache.users.filter(u=>!u.seed).sort((a,b)=>b.createdAt-a.createdAt);
+  const demo = Cache.users.filter(u=>u.seed).sort((a,b)=>a.id.localeCompare(b.id));
+  const row = (u, showRole) => `
+    <div class="list-row">
+      <div style="display:flex; align-items:center; gap:10px; min-width:0;">
+        <span class="avatar">${esc(initials(u.companyName))}</span>
+        <div style="min-width:0;"><b style="font-size:13.5px; display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(u.companyName)}</b>
+          <div class="faint" style="font-size:12px; display:flex; align-items:center; gap:6px; margin-top:2px;">${showRole ? roleTag(u.role) : ''} ${esc(u.country||'—')}</div></div>
+      </div>
+      <button class="btn btn-soft btn-sm" data-action="do-login" data-id="${esc(u.id)}">${t('login.continue')}</button>
+    </div>`;
+  return `<div class="auth-wrap"><div class="auth-card ${demo.length ? 'auth-card-wide' : ''}">
     ${authTop()}
     <div class="auth-panel">
       <h2 style="font-size:21px;">${t('login.title')}</h2>
-      <p class="muted" style="font-size:13px; margin-top:6px;">${t('login.sub')}</p>
-      <div style="margin-top:18px; display:flex; flex-direction:column;">
-        ${companies.length ? companies.map(u => `
-          <div class="list-row">
-            <div style="display:flex; align-items:center; gap:10px;">
-              <span class="avatar">${esc(initials(u.companyName))}</span>
-              <div><b style="font-size:13.5px;">${esc(u.companyName)}</b>
-                <div class="faint" style="font-size:12px; display:flex; align-items:center; gap:6px; margin-top:2px;">${roleTag(u.role)} ${esc(u.country||'—')}</div></div>
-            </div>
-            <button class="btn btn-soft btn-sm" data-action="do-login" data-id="${esc(u.id)}">${t('login.continue')}</button>
-          </div>`).join('') : emptyState(t('login.empty'))}
-      </div>
+      <p class="muted" style="font-size:13px; margin-top:6px;">${t(demo.length ? 'login.subDemo' : 'login.sub')}</p>
+      ${mine.length ? `<div style="margin-top:18px;"><b class="lbl">${t('login.yours')}</b>
+        <div style="display:flex; flex-direction:column; margin-top:4px;">${mine.map(u => row(u, true)).join('')}</div></div>` : ''}
+      ${demo.length ? `<div style="margin-top:18px;"><b class="lbl">${t('login.demo')}</b>
+        <div class="login-roles">${Object.keys(ROLES).map(role => {
+          const list = demo.filter(u => u.role === role);
+          return list.length ? `<div class="login-role">${roleTag(role, true)}${list.map(u => row(u, false)).join('')}</div>` : '';
+        }).join('')}</div></div>` : ''}
+      ${!mine.length && !demo.length ? `<div style="margin-top:18px;">${emptyState(t('login.empty'))}</div>` : ''}
     </div>
     <p class="faint" style="text-align:center; font-size:13px;">${t('login.new')} <span class="kicker-link" data-action="go-register" style="cursor:pointer;">${t('login.register')}</span></p>
   </div></div>`;
@@ -859,7 +866,7 @@ function offersPanel(r, offers, isOwner, kind){
     <div class="section-title"><b style="font-size:14.5px;">${t('offers.title',{n:offers.length})}</b></div>
     ${showAI ? renderAIRecommendations(offers, r, collection) : ''}
     <div class="table-wrap" style="margin-top:${showAI?'18px':'10px'};"><table>
-      <thead><tr><th>${t('th.provider')}</th><th>${t('th.role')}</th><th>${t('th.price')}</th><th>${t('th.transit')}</th><th>${t('th.service')}</th><th>${t('th.submitted')}</th></tr></thead>
+      <thead><tr><th>${t('th.provider')}</th><th>${t('th.role')}</th><th>${t('th.price')}</th><th>${t('th.transit')}</th><th>${t('th.serviceLevel')}</th><th>${t('th.submitted')}</th></tr></thead>
       <tbody>${[...offers].sort((a,b)=>a.price-b.price).map(o=>`
         <tr ${r.awardedOfferId===o.id?'style="background:var(--teal-soft);"':''}>
           <td>${esc(o.providerName)} ${r.awardedOfferId===o.id?`<span class="badge badge-teal">${t('offers.awarded')}</span>`:''}</td>
@@ -1561,7 +1568,7 @@ function onGlobalSubmit(e){
     if (!c || !(kg > 0)) return;
     (async () => {
       await notify(c.ownerId, note ? 'n.capRequestNote' : 'n.capRequest',
-        { company: me().companyName, kg: kg.toLocaleString(locale()), route: routeText(c), note });
+        { company: me().companyName, kg, route: routeText(c), note });
       toast(t('toast.capRequested'));
       form.reset();
     })();

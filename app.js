@@ -145,6 +145,29 @@ const Store = {
     return arr.find(d => d.id === id) || null;
   },
 
+  // Demo data (ids starting "seed_"). putSeed writes a collection's seed rows, replacing earlier ones locally.
+  async putSeed(collection, docs){
+    if (this.backend === 'db'){
+      // Retry transient failures with a growing, jittered delay so one hiccup doesn't leave a half-written demo.
+      for (const { id, ...data } of docs){
+        for (let attempt = 0; ; attempt++){
+          try{ await this._db.collection(collection).doc(id).set(data); break; }
+          catch(e){
+            if (attempt >= 3) throw e;
+            await new Promise(r => setTimeout(r, 300 * 2 ** attempt * (0.5 + Math.random())));
+          }
+        }
+      }
+      return;
+    }
+    const own = this._localRead(collection).filter(d => !String(d.id).startsWith('seed_'));
+    this._localWrite(collection, [...docs, ...own]);
+  },
+  // Local backend only: rewrite every row of a collection through fn (used to keep demo dates recent).
+  mapLocal(collection, fn){
+    this._localWrite(collection, this._localRead(collection).map(fn));
+  },
+
   // Subscribe to a whole collection; cb receives an array of {id,...}.
   subscribe(collection, cb){
     if (this.backend === 'db'){
@@ -283,6 +306,7 @@ async function boot(){
   const root = qs('#app');
   root.innerHTML = `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-family:var(--font-mono);font-size:13px;">${t('loading')}</div>`;
   await Store.init();
+  try{ await Seed.ensure(); }catch(e){ /* the app works without demo data */ }
   Store.subscribeAll();
   // small grace period so first snapshot(s) arrive before first paint
   setTimeout(render, 60);
