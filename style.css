@@ -459,6 +459,13 @@ footer.site-footer{border-top:1px solid var(--border); padding-block:32px; margi
 .auth-card{width:100%; max-width:460px; display:flex; flex-direction:column; gap:20px;}
 .auth-top{display:flex; align-items:center; justify-content:space-between; gap:12px;}
 .auth-panel{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-l); padding:28px; box-shadow:var(--shadow-md);}
+.auth-card-wide{max-width:900px;}
+.login-roles{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin-top:8px;}
+@media (max-width:760px){ .login-roles{grid-template-columns:minmax(0,1fr);} }
+.login-role{border:1px solid var(--border); border-radius:var(--radius-m); padding:14px 14px 4px;}
+.login-role .role-tag{margin-bottom:4px;}
+.login-role .list-row{padding:10px 0;}
+.login-role .list-row:first-of-type{border-top:none;}
 
 .legal-note{
   font-size:12px; color:var(--text-faint); border-left:2px solid var(--border); padding-left:10px; line-height:1.5;
