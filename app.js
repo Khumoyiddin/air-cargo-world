@@ -33,6 +33,7 @@ const ICONS = {
   chat: '<path d="M4 5h16v11H9l-5 4V5Z"/>',
   send: '<line x1="21" y1="3" x2="10" y2="14"/><polygon points="21 3 14 21 10 14 3 10 21 3"/>',
   doc: '<path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"/><path d="M14 3v5h5"/>',
+  layers: '<polygon points="12 3 21 8 12 13 3 8 12 3"/><polyline points="3 12.5 12 17.5 21 12.5"/><polyline points="3 17 12 22 21 17"/>',
   building: '<rect x="4" y="3" width="10" height="18" rx="1"/><rect x="14" y="9" width="6" height="12" rx="1"/><line x1="7" y1="7" x2="7" y2="7"/><line x1="10.5" y1="7" x2="10.5" y2="7"/>',
 };
 function icon(name, size=18){
@@ -60,14 +61,24 @@ function uid(prefix='id'){ return prefix + '_' + Math.random().toString(36).slic
 function initials(name){ return (name||'?').split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase(); }
 function clamp(n,a,b){ return Math.max(a, Math.min(b, n)); }
 function debounce(fn, ms){ let timer; return (...a)=>{ clearTimeout(timer); timer=setTimeout(()=>fn(...a), ms); }; }
+// Local-time values for <input type="date"> / <input type="time">, and back to a timestamp.
+function pad2(n){ return String(n).padStart(2,'0'); }
+function isoDate(ts){ const d = new Date(ts); return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
+function isoTime(ts){ const d = new Date(ts); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; }
+function parseLocalDateTime(date, time){
+  if (!date || !time) return null;
+  const [y,m,d] = date.split('-').map(Number), [hh,mm] = time.split(':').map(Number);
+  const ts = new Date(y, m-1, d, hh, mm).getTime();
+  return isNaN(ts) ? null : ts;
+}
 
 /* ---------------------------------------------------------------------- */
 /* Store — unified data layer over the `db` capability or a local fallback */
 /* ---------------------------------------------------------------------- */
-const COLLECTIONS = ['users','cargoRequests','offers','charterRequests','notifications'];
+const COLLECTIONS = ['users','cargoRequests','offers','charterRequests','notifications','capacity'];
 
-const Cache = { users:[], cargoRequests:[], offers:[], charterRequests:[], notifications:[] };
-let cacheReady = { users:false, cargoRequests:false, offers:false, charterRequests:false, notifications:false };
+const Cache = { users:[], cargoRequests:[], offers:[], charterRequests:[], notifications:[], capacity:[] };
+let cacheReady = { users:false, cargoRequests:false, offers:false, charterRequests:false, notifications:false, capacity:false };
 
 const Store = {
   backend: null, // 'db' | 'local'
@@ -223,8 +234,8 @@ function scheduleRender(){
   renderScheduled = true;
   requestAnimationFrame(() => {
     renderScheduled = false;
-    // Don't nuke an in-progress multi-step form when a background snapshot arrives.
-    if (Router.route.params && Router.route.params.id === 'new') return;
+    // Don't nuke an in-progress form (ids 'new', 'new-flight', 'new-space') when a background snapshot arrives.
+    if (/^new/.test(Router.route.params?.id || '')) return;
     render();
   });
 }
@@ -236,7 +247,7 @@ function render(){
   const { name } = Router.route;
 
   const authed = !!Session.user;
-  const appRoutes = ['dashboard','my-cargo','marketplace','tender','charter','charter-detail','contracts','notifications'];
+  const appRoutes = ['dashboard','my-cargo','marketplace','tender','charter','charter-detail','capacity','capacity-detail','contracts','notifications'];
 
   if (authed && appRoutes.includes(name)){
     root.innerHTML = renderAppShell();

@@ -16,10 +16,74 @@ const ROLES = {
 
 const ROLE_NAV = {
   cargo_owner: ['dashboard','my-cargo','marketplace','charter','contracts'],
-  forwarder:   ['dashboard','marketplace','charter','contracts'],
-  airline:     ['dashboard','marketplace','charter','contracts'],
+  forwarder:   ['dashboard','my-cargo','marketplace','charter','contracts'],
+  airline:     ['dashboard','capacity','my-cargo','marketplace','charter','contracts'],
   broker:      ['dashboard','charter','marketplace','contracts'],
 };
+
+// Dashboard primary actions per role: [label key, route, id]. Navigation lives in the sidebar only.
+const ROLE_ACTIONS = {
+  cargo_owner: [['dash.newCargo','my-cargo','new'], ['dash.newCharter','charter','new']],
+  forwarder:   [['dash.newCommercial','my-cargo','new'], ['dash.newCharter','charter','new']],
+  airline:     [['dash.addFlight','capacity','new-flight'], ['dash.addSpace','capacity','new-space'], ['dash.newCommercial','my-cargo','new']],
+  broker:      [],
+};
+
+/* ---------------------------------------------------------------------- */
+/* Cargo types (IATA special-handling style), stored by `code`             */
+/* `en` / `ru` are dropdown labels; `shortEn` / `shortRu` are for tables.   */
+/* ---------------------------------------------------------------------- */
+const CARGO_TYPES = [
+  { code:'GEN',   en:'General Cargo (GEN)',                      ru:'General Cargo (GEN) — генеральный груз',                     shortEn:'General cargo',        shortRu:'Генеральный груз' },
+  { code:'DGR',   en:'Dangerous Goods (DGR)',                    ru:'Dangerous Goods (DGR) — опасные грузы',                      shortEn:'Dangerous goods',      shortRu:'Опасный груз' },
+  { code:'PER',   en:'Perishable Cargo (PER)',                   ru:'Perishable Cargo (PER) — скоропортящиеся грузы',             shortEn:'Perishables',          shortRu:'Скоропортящийся груз' },
+  { code:'PIL',   en:'Pharmaceutical Cargo (PIL / Pharma)',      ru:'Pharmaceutical Cargo (PIL / Pharma) — фармацевтика',         shortEn:'Pharma',               shortRu:'Фармацевтика' },
+  { code:'AVI',   en:'Live Animals (AVI)',                       ru:'Live Animals (AVI) — живые животные',                        shortEn:'Live animals',         shortRu:'Живые животные' },
+  { code:'VAL',   en:'Valuable Cargo (VAL)',                     ru:'Valuable Cargo (VAL) — ценный груз',                         shortEn:'Valuables',            shortRu:'Ценный груз' },
+  { code:'AUTO',  en:'Automotive Cargo',                         ru:'Automotive Cargo — автомобили и автокомпоненты',             shortEn:'Automotive',           shortRu:'Автомобили и автокомпоненты' },
+  { code:'AOG',   en:'Aircraft Parts / AOG Cargo',               ru:'Aircraft Parts / AOG Cargo — авиационные запчасти',          shortEn:'Aircraft parts / AOG', shortRu:'Авиазапчасти / AOG' },
+  { code:'MAIL',  en:'Mail (MAIL)',                              ru:'Mail (MAIL) — почта',                                        shortEn:'Mail',                 shortRu:'Почта' },
+  { code:'DIP',   en:'Diplomatic Cargo / Diplomatic Mail (DIP)', ru:'Diplomatic Cargo / Diplomatic Mail (DIP) — дипломатический груз / почта', shortEn:'Diplomatic', shortRu:'Дипломатический груз' },
+  { code:'OTHER', en:'Other (specify)',                          ru:'Другое (указать самостоятельно)',                            shortEn:'Other',                shortRu:'Другое' },
+];
+const CARGO_TYPE_BY_CODE = Object.fromEntries(CARGO_TYPES.map(c => [c.code, c]));
+// Values used before the list above, so older requests still display and filter correctly.
+const LEGACY_CARGO_TYPE = {
+  'General Cargo':'GEN', 'Perishable':'PER', 'Pharma / Cold Chain':'PIL', 'Automotive Parts':'AUTO',
+  'Live Animals':'AVI', 'Valuables / High-Value':'VAL', 'E-commerce / Parcels':'OTHER',
+};
+
+// Dangerous goods classes (IATA DGR), stored as the class number.
+const DG_CLASSES = [
+  { n:1, en:'Explosives',         ru:'Взрывчатые' },
+  { n:2, en:'Gases',              ru:'Газы' },
+  { n:3, en:'Flammable Liquids',  ru:'Горючие жидкости' },
+  { n:4, en:'Flammable Solids',   ru:'Горючие твёрдые' },
+  { n:5, en:'Oxidizers',          ru:'Окислители' },
+  { n:6, en:'Toxic / Infectious', ru:'Токсичные / инфекционные' },
+  { n:7, en:'Radioactive',        ru:'Радиоактивные' },
+  { n:8, en:'Corrosives',         ru:'Коррозионные' },
+  { n:9, en:'Miscellaneous',      ru:'Прочие DGR' },
+];
+
+// Delivery terms offered on a cargo request, stored by `code`.
+const INCOTERMS = [
+  { code:'EXW', en:'Ex Works',                       ru:'Франко-завод' },
+  { code:'FCA', en:'Free Carrier',                   ru:'Франко-перевозчик' },
+  { code:'DAP', en:'Delivered at Place',             ru:'Поставка в месте назначения' },
+  { code:'DDP', en:'Delivered Duty Paid',            ru:'Поставка с оплатой пошлин' },
+  { code:'CIP', en:'Carriage and Insurance Paid To', ru:'Перевозка и страхование оплачены до' },
+];
+
+// Temperature regimes, shared by cargo requests and airline flights / capacity.
+const TEMP_OPTIONS = ['Ambient','+2…+8 °C (chilled)','+15…+25 °C (CRT)','+2…+25 °C','−20 °C (frozen)','−60 °C and below (deep frozen)'];
+
+// Aircraft an airline can publish a flight or free capacity on.
+const AIRCRAFT_TYPES = [
+  'Boeing 747-8F','Boeing 747-400F','Boeing 777F','Boeing 767-300F','Boeing 757-200F','Boeing 737-800BCF',
+  'Airbus A330-200F','Airbus A330-300P2F','Airbus A321P2F','Airbus A300-600F','McDonnell Douglas MD-11F',
+  'Antonov An-124-100','Ilyushin Il-76TD','ATR 72-600F','Passenger aircraft (belly hold)','Other',
+];
 
 /* ---------------------------------------------------------------------- */
 /* Airports (subset of major cargo gateways, used for route selection)     */

@@ -6,7 +6,7 @@
 const MILESTONE_COUNT = 7;
 
 let wizardDocs = [];
-let marketFilters = { q:'', origin:'', dg:'' };
+let marketFilters = { q:'', origin:'', dest:'', type:'', typeOther:'', tab:'cargo' };
 let chatOpen = false;
 let notifOpen = false;
 let sidebarOpen = false;
@@ -25,6 +25,17 @@ function airportOptions(selected){
   return AIRPORTS.map(a => `<option value="${a.code}" ${a.code===selected?'selected':''}>${a.code} — ${apCity(a)}, ${apCountry(a)}</option>`).join('');
 }
 function roleLabel(role){ return ROLES[role] ? t('role.'+role) : esc(role || '—'); }
+// Coloured role pill, so it's always obvious which role the session is using.
+function roleTag(role, large){
+  return `<span class="role-tag ${large?'role-tag-lg':''}" data-role="${esc(role)}">${icon(ROLES[role]?.icon || 'user', large?14:11)} ${roleLabel(role)}</span>`;
+}
+// Cargo owners create "cargo requests"; forwarders and airlines create "commercial cargo requests".
+function newCargoKey(){ return me()?.role === 'cargo_owner' ? 'dash.newCargo' : 'dash.newCommercial'; }
+function routeTitle(name){ return name === 'my-cargo' && me()?.role !== 'cargo_owner' ? t('route.my-requests') : t('route.'+name); }
+function marketCargo(){ return Cache.cargoRequests.filter(r=>r.status==='open').sort((a,b)=>b.createdAt-a.createdAt); }
+function myCapacity(){ return Cache.capacity.filter(c=>c.ownerId===me().id).sort((a,b)=>b.createdAt-a.createdAt); }
+// Active listings whose one-off departure hasn't passed yet.
+function marketCapacity(){ return Cache.capacity.filter(c=>c.status==='active' && !(c.departAt && c.departAt < Date.now())).sort((a,b)=>b.createdAt-a.createdAt); }
 function myCargoRequests(){ return Cache.cargoRequests.filter(r=>r.ownerId===me().id).sort((a,b)=>b.createdAt-a.createdAt); }
 function openMarketCargo(){ const u = me(); return Cache.cargoRequests.filter(r=>r.status==='open' && (!u || r.ownerId!==u.id)); }
 function offersFor(requestId, requestType){ return Cache.offers.filter(o=>o.requestId===requestId && o.requestType===requestType); }
@@ -43,6 +54,31 @@ async function notify(userId, key, params){
   try{ await Store.add('notifications', { userId, key, params: params || {}, read:false, createdAt: Date.now() }); }catch(e){}
 }
 function notifText(n){ return n.key ? t(n.key, n.params || {}) : esc(n.text || ''); }
+
+/* Cargo type, dangerous goods and Incoterms labels. Text results are raw: escape before output. */
+function cargoTypeCode(r){ return CARGO_TYPE_BY_CODE[r.cargoType] ? r.cargoType : (LEGACY_CARGO_TYPE[r.cargoType] || 'OTHER'); }
+function cargoTypeText(r){
+  const ct = CARGO_TYPE_BY_CODE[r.cargoType];
+  if (!ct) return tv(r.cargoType || '—');
+  if (ct.code === 'OTHER' && r.cargoTypeOther) return r.cargoTypeOther;
+  return LANG==='ru' ? ct.shortRu : ct.shortEn;
+}
+function cargoTypeOptions(selected){
+  return CARGO_TYPES.map(ct => `<option value="${ct.code}" ${ct.code===selected?'selected':''}>${LANG==='ru' ? ct.ru : ct.en}</option>`).join('');
+}
+function dgClassName(n, lang){ const c = DG_CLASSES.find(d => d.n === Number(n)); return c ? ((lang || LANG)==='ru' ? c.ru : c.en) : ''; }
+function dgBadge(r){
+  const list = (r.dgClasses || []).join(', ');
+  return `<span class="badge badge-red">${tv('DG')}${list ? ' · ' + t('dg.classShort', { list }) : ''}</span>`;
+}
+function dgDetail(r){
+  if (r.dg !== 'DG') return esc(tv('Non-DG'));
+  const list = r.dgClasses || [];
+  return list.length ? list.map(n => `${t('dg.class',{n})} — ${esc(dgClassName(n))}`).join('<br>') : esc(tv('DG'));
+}
+function incotermText(code){ const it = INCOTERMS.find(x => x.code === code); return it ? `${it.code} — ${LANG==='ru' ? it.ru : it.en}` : tv(code || '—'); }
+function incotermShort(code){ return INCOTERMS.some(x => x.code === code) ? code : tv(code || '—'); }
+function yoursBadge(){ return `<span class="badge badge-neutral">${t('mkt.yours')}</span>`; }
 
 /* ---------------------------------------------------------------------- */
 /* Shared fragments                                                         */
@@ -269,7 +305,7 @@ function renderLoginPage(){
             <div style="display:flex; align-items:center; gap:10px;">
               <span class="avatar">${esc(initials(u.companyName))}</span>
               <div><b style="font-size:13.5px;">${esc(u.companyName)}</b>
-                <div class="faint" style="font-size:12px;">${roleLabel(u.role)} · ${esc(u.country||'—')}</div></div>
+                <div class="faint" style="font-size:12px; display:flex; align-items:center; gap:6px; margin-top:2px;">${roleTag(u.role)} ${esc(u.country||'—')}</div></div>
             </div>
             <button class="btn btn-soft btn-sm" data-action="do-login" data-id="${esc(u.id)}">${t('login.continue')}</button>
           </div>`).join('') : emptyState(t('login.empty'))}
@@ -296,7 +332,7 @@ function renderAppShell(){
       <div class="topbar">
         <div class="topbar-left">
           <button class="icon-btn mobile-nav-toggle" data-action="toggle-sidebar" aria-label="${t('shell.menu')}">${icon('menu',18)}</button>
-          <h2>${t('route.'+Router.route.name)}</h2>
+          <h2>${routeTitle(Router.route.name)}</h2>
         </div>
         <div class="topbar-right">
           ${langSwitch()}
@@ -307,9 +343,9 @@ function renderAppShell(){
           </div>
           <div class="user-chip" title="${esc(u.companyName)}">
             <span class="avatar">${esc(initials(u.companyName))}</span>
-            <div class="user-chip-text" style="line-height:1.2; max-width:120px; overflow:hidden;">
+            <div class="user-chip-text" style="line-height:1.2; max-width:170px; overflow:hidden;">
               <div style="font-size:12.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(u.companyName)}</div>
-              <div class="faint" style="font-size:10.5px; white-space:nowrap;">${roleLabel(u.role)}</div>
+              <div style="margin-top:3px;">${roleTag(u.role)}</div>
             </div>
             <button class="icon-btn" style="width:26px;height:26px; flex-shrink:0;" title="${t('shell.logout')}" aria-label="${t('shell.logout')}" data-action="logout">${icon('logout',13)}</button>
           </div>
@@ -321,11 +357,11 @@ function renderAppShell(){
   `;
 }
 function navGroup(nav){
-  return nav.map(key => `<a href="#/${key}" class="side-link ${Router.route.name===key?'active':''}">${icon(navIcon(key),17)} ${t('route.'+key)}</a>`).join('')
+  return nav.map(key => `<a href="#/${key}" class="side-link ${Router.route.name===key?'active':''}">${icon(navIcon(key),17)} ${routeTitle(key)}</a>`).join('')
     + `<div class="side-sep"></div><a href="#/notifications" class="side-link ${Router.route.name==='notifications'?'active':''}">${icon('bell',17)} ${t('route.notifications')} ${unreadCount()>0?`<span class="badge badge-red" style="margin-left:auto;">${unreadCount()}</span>`:''}</a>`;
 }
 function navIcon(key){
-  return { dashboard:'grid', 'my-cargo':'box', marketplace:'list', charter:'plane', contracts:'file' }[key] || 'grid';
+  return { dashboard:'grid', 'my-cargo':'box', marketplace:'list', charter:'plane', capacity:'layers', contracts:'file' }[key] || 'grid';
 }
 
 function renderNotifDropdown(){
@@ -356,6 +392,8 @@ function viewFor(name, id){
     case 'tender': return viewCargoDetail(id);
     case 'charter': return id==='new' ? viewCharterForm() : viewCharterList();
     case 'charter-detail': return viewCharterDetail(id);
+    case 'capacity': return id==='new-flight' ? viewCapacityForm('flight') : id==='new-space' ? viewCapacityForm('space') : viewCapacityList();
+    case 'capacity-detail': return viewCapacityDetail(id);
     case 'contracts': return viewContracts();
     case 'notifications': return viewNotifications();
     default: return viewDashboard();
@@ -365,10 +403,26 @@ function viewFor(name, id){
 /* ---------------------------------------------------------------------- */
 /* Dashboard                                                                  */
 /* ---------------------------------------------------------------------- */
+function roleBanner(u){
+  const actions = ROLE_ACTIONS[u.role] || [];
+  return `<div class="card role-banner" data-role="${esc(u.role)}">
+    <div class="role-banner-id">
+      <div class="role-banner-icon">${icon(ROLES[u.role]?.icon || 'user', 22)}</div>
+      <div style="min-width:0;">
+        <div class="role-banner-top"><span class="faint" style="font-size:12.5px;">${t('dash.youAre')}</span>${roleTag(u.role, true)}</div>
+        <h2 class="role-banner-name">${esc(u.companyName)}</h2>
+        <p class="muted" style="font-size:13px; margin-top:4px; max-width:62ch;">${t('roleBlurb.'+u.role)}</p>
+      </div>
+    </div>
+    ${actions.length ? `<div class="role-banner-actions">
+      ${actions.map(([key, route, id], i) => `<button class="btn ${i===0?'btn-primary':'btn-soft'} btn-sm" data-action="nav" data-route="${route}" data-id="${id}">${icon('plus',15)} ${t(key)}</button>`).join('')}
+    </div>` : ''}
+  </div>`;
+}
+
 function viewDashboard(){
   const u = me();
   const isOwner = u.role==='cargo_owner';
-  const canCharter = ['cargo_owner','forwarder'].includes(u.role);
   const mine = isOwner ? myCargoRequests() : [];
   const myRequests = [...myCargoRequests(), ...myCharterRequests()];
   const offers = myOffers();
@@ -388,21 +442,22 @@ function viewDashboard(){
   const recent = myNotifications().slice(0,5);
 
   return `
+  ${roleBanner(u)}
+
   <div class="stat-grid">
     ${stats.map(([key,num,ic])=>`<div class="stat-tile">${icon(ic,16)}<span class="num">${num}</span><span class="label">${t(key)}</span></div>`).join('')}
   </div>
 
-  <div class="grid-2">
-    <div class="card">
-      <div class="section-title"><b style="font-size:14.5px;">${t('dash.quick')}</b></div>
-      <div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:14px;">
-        ${isOwner ? `<button class="btn btn-primary btn-sm" data-action="nav" data-route="my-cargo" data-id="new">${icon('plus',15)} ${t('dash.newCargo')}</button>` : ''}
-        ${canCharter ? `<button class="btn btn-soft btn-sm" data-action="nav" data-route="charter" data-id="new">${icon('plus',15)} ${t('dash.newCharter')}</button>` : ''}
-        <button class="btn btn-ghost btn-sm" data-action="nav" data-route="marketplace">${icon('list',15)} ${t('dash.browseMarket')}</button>
-        ${!canCharter ? `<button class="btn btn-ghost btn-sm" data-action="nav" data-route="charter">${icon('plane',15)} ${t('dash.browseCharter')}</button>` : ''}
-        <button class="btn btn-ghost btn-sm" data-action="nav" data-route="contracts">${icon('file',15)} ${t('dash.contracts')}</button>
-      </div>
-    </div>
+  <div class="dash-grid">
+    ${isOwner ? `<div class="card">
+      <div class="section-title"><b style="font-size:14.5px;">${t('dash.myRecent')}</b>
+        <button class="btn btn-ghost btn-sm" data-action="nav" data-route="my-cargo">${t('dash.viewAll')}</button></div>
+      ${mine.length ? requestTable(mine.slice(0,5), 'tender') : emptyState(t('dash.noRequests'))}
+    </div>` : `<div class="card">
+      <div class="section-title"><b style="font-size:14.5px;">${t('dash.latestOpps')}</b>
+        <button class="btn btn-ghost btn-sm" data-action="nav" data-route="marketplace">${t('dash.viewAll')}</button></div>
+      ${openMarketCargo().length ? requestTable(openMarketCargo().slice(0,5), 'tender') : emptyState(t('dash.noOpps'))}
+    </div>`}
     <div class="card">
       <b style="font-size:14.5px;">${t('dash.recent')}</b>
       <div style="margin-top:8px;">
@@ -412,16 +467,6 @@ function viewDashboard(){
       </div>
     </div>
   </div>
-
-  ${isOwner ? `<div class="card">
-    <div class="section-title"><b style="font-size:14.5px;">${t('dash.myRecent')}</b>
-      <button class="btn btn-ghost btn-sm" data-action="nav" data-route="my-cargo">${t('dash.viewAll')}</button></div>
-    ${mine.length ? requestTable(mine.slice(0,5), 'tender') : emptyState(t('dash.noRequests'), `<button class="btn btn-primary btn-sm" data-action="nav" data-route="my-cargo" data-id="new">${icon('plus',15)} ${t('dash.newRequest')}</button>`)}
-  </div>` : `<div class="card">
-    <div class="section-title"><b style="font-size:14.5px;">${t('dash.latestOpps')}</b>
-      <button class="btn btn-ghost btn-sm" data-action="nav" data-route="marketplace">${t('dash.viewAll')}</button></div>
-    ${openMarketCargo().length ? requestTable(openMarketCargo().slice(0,5), 'tender') : emptyState(t('dash.noOpps'))}
-  </div>`}
   `;
 }
 
@@ -432,7 +477,7 @@ function requestTable(list, route){
       <tr style="cursor:pointer;" data-action="nav" data-route="${route}" data-id="${esc(r.id)}">
         <td class="mono">${routeText(r)}</td>
         <td>${esc(r.commodity||'—')}</td>
-        <td>${esc(tv(r.service||'—'))}</td>
+        <td>${esc(incotermShort(r.service))}</td>
         <td>${badgeForStatus(r.status)}</td>
         <td>${offersFor(r.id,'cargo').length}</td>
         <td>${icon('chevron',15)}</td>
@@ -448,7 +493,7 @@ function viewCargoList(){
   return `
   <div class="section-title">
     <div><h2 style="font-size:19px;">${t('mc.title')}</h2><p class="muted" style="font-size:13px;">${t('mc.sub')}</p></div>
-    <button class="btn btn-primary btn-sm" data-action="nav" data-route="my-cargo" data-id="new">${icon('plus',15)} ${t('mc.new')}</button>
+    <button class="btn btn-primary btn-sm" data-action="nav" data-route="my-cargo" data-id="new">${icon('plus',15)} ${t(newCargoKey())}</button>
   </div>
   <div class="card card-flush">
     ${mine.length ? requestTable(mine, 'tender') : emptyState(t('mc.empty'), `<button class="btn btn-primary btn-sm" data-action="nav" data-route="my-cargo" data-id="new">${icon('plus',15)} ${t('mc.first')}</button>`)}
@@ -458,18 +503,30 @@ function viewCargoList(){
 /* ---------------------------------------------------------------------- */
 /* Cargo request wizard (6 steps)                                            */
 /* ---------------------------------------------------------------------- */
-const CARGO_TYPES = ['General Cargo','Perishable','Pharma / Cold Chain','Automotive Parts','E-commerce / Parcels','Live Animals','Valuables / High-Value'];
-const TEMP_OPTIONS = ['Ambient','Chilled (2–8°C)','Frozen (-18°C)','Controlled Room Temp (15–25°C)'];
-const SERVICES = ['Airport-Airport','Door-Airport','Airport-Door','Door-Door'];
 const DOC_PRESETS = ['Commercial Invoice','Packing List','Export Declaration','Certificate of Origin'];
-const TENDER_WINDOWS = [['24 hours',24],['48 hours',48],['72 hours',72],['5 days',120]];
+
+// Multi-select DG class card; shares the .opt-card look with the Incoterms choice in step 3.
+function dgClassCard(c){
+  return `<button type="button" class="opt-card dg" data-action="toggle-chip" data-group="dg-class" data-value="${c.n}" aria-pressed="false">
+    <b>${t('dg.class',{n:c.n})}</b><span>${dgClassName(c.n)}</span>${LANG==='ru' ? `<small>${dgClassName(c.n,'en')}</small>` : ''}</button>`;
+}
+function dateTimeField(id, labelKey, ts){
+  return `<div class="field"><label for="${id}-date">${t(labelKey)}</label>
+    <div class="dt-pair">
+      <input type="date" id="${id}-date" value="${ts ? isoDate(ts) : ''}" aria-label="${t(labelKey)} — ${t('wz.date')}">
+      <input type="time" id="${id}-time" value="${ts ? isoTime(ts) : ''}" aria-label="${t(labelKey)} — ${t('wz.time')}">
+    </div></div>`;
+}
+function pickedValues(root, group){ return qsa(`[data-group="${group}"].active`, root).map(b => b.dataset.value); }
 
 function viewCargoWizard(){
   wizardDocs = [];
+  // Offer window defaults: from now, for 48 hours.
+  const startTs = new Date().setSeconds(0, 0), endTs = startTs + 48*3600000;
   return `
   <div class="card wizard" data-total="6" data-step="1" data-kind="cargo" style="max-width:720px;">
     <div class="section-title">
-      <div><h2 style="font-size:18px;">${t('wz.title')}</h2><span class="wizard-step-label faint" style="font-size:12px;">${t('wz.step',{n:1,total:6})}</span></div>
+      <div><h2 style="font-size:18px;">${t(newCargoKey())}</h2><span class="wizard-step-label faint" style="font-size:12px;">${t('wz.step',{n:1,total:6})}</span></div>
       <button class="btn btn-ghost btn-sm" data-action="nav" data-route="my-cargo">${t('wz.cancel')}</button>
     </div>
     <div class="step-tracker" style="margin:16px 0 22px;">${[1,2,3,4,5,6].map(i=>`<div class="dot ${i===1?'on':''}"></div>`).join('')}</div>
@@ -486,9 +543,8 @@ function viewCargoWizard(){
       <h3 style="font-size:15px; margin-bottom:14px;">${t('wz.s2')}</h3>
       <div class="grid-2">
         <div class="field"><label for="cg-commodity">${t('wz.commodity')}</label><input id="cg-commodity" placeholder="${t('wz.commodityPh')}"></div>
-        <div class="field"><label for="cg-type">${t('wz.type')}</label><select id="cg-type">
-          ${CARGO_TYPES.map(v=>`<option value="${v}">${tv(v)}</option>`).join('')}
-        </select></div>
+        <div class="field"><label for="cg-type">${t('wz.type')}</label><select id="cg-type">${cargoTypeOptions('GEN')}</select>
+          <input id="cg-type-other" data-show-when="#cg-type=OTHER" hidden placeholder="${t('wz.typeOtherPh')}" aria-label="${t('wz.typeOther')}"></div>
         <div class="field"><label for="cg-hs">${t('wz.hs')}</label><input id="cg-hs" class="mono" placeholder="8471.30"></div>
         <div class="field"><label for="cg-weight">${t('wz.weight')}</label><input id="cg-weight" type="number" min="1" placeholder="1200"></div>
         <div class="field"><label for="cg-volume">${t('wz.volume')}</label><input id="cg-volume" type="number" min="0" step="0.1" placeholder="4.2"></div>
@@ -505,14 +561,19 @@ function viewCargoWizard(){
         </div>
         <input type="hidden" id="cg-dg" value="Non-DG">
       </div>
+      <div class="field" data-show-when="#cg-dg=DG" hidden style="margin-top:14px;">
+        <label>${t('wz.dgClasses')}</label>
+        <div class="opt-grid">${DG_CLASSES.map(dgClassCard).join('')}</div>
+      </div>
     </div>
 
     <div class="wizard-section" data-step="3" hidden>
-      <h3 style="font-size:15px; margin-bottom:14px;">${t('wz.s3')}</h3>
-      <div class="chip-select" data-chip-group="service">
-        ${SERVICES.map((s,i)=>`<button type="button" class="chip ${i===0?'active':''}" data-action="pick-chip" data-group="service" data-value="${s}" data-target="#cg-service">${tv(s)}</button>`).join('')}
+      <h3 style="font-size:15px; margin-bottom:6px;">${t('wz.s3')}</h3>
+      <p class="faint" style="font-size:12px; margin-bottom:12px;">${t('wz.s3hint')}</p>
+      <div class="opt-grid" data-chip-group="service" style="grid-template-columns:repeat(auto-fill,minmax(118px,1fr));">
+        ${INCOTERMS.map((it,i)=>`<button type="button" class="opt-card ${i===0?'active':''}" data-action="pick-chip" data-group="service" data-value="${it.code}" data-target="#cg-service"><b>${it.code}</b><span>${LANG==='ru' ? it.ru : it.en}</span></button>`).join('')}
       </div>
-      <input type="hidden" id="cg-service" value="Airport-Airport">
+      <input type="hidden" id="cg-service" value="${INCOTERMS[0].code}">
     </div>
 
     <div class="wizard-section" data-step="4" hidden>
@@ -528,12 +589,12 @@ function viewCargoWizard(){
 
     <div class="wizard-section" data-step="5" hidden>
       <h3 style="font-size:15px; margin-bottom:14px;">${t('wz.s5')}</h3>
-      <p class="faint" style="font-size:12px; margin-bottom:10px;">${t('wz.tenderQ')}</p>
-      <div class="chip-select" data-chip-group="tender">
-        ${TENDER_WINDOWS.map(([l,h],i)=>`<button type="button" class="chip ${i===1?'active':''}" data-action="pick-chip" data-group="tender" data-value="${l}|${h}" data-target="#cg-tender">${tv(l)}</button>`).join('')}
+      <p class="faint" style="font-size:12px; margin-bottom:12px;">${t('wz.tenderQ')}</p>
+      <div class="grid-2">
+        ${dateTimeField('cg-from', 'wz.from', startTs)}
+        ${dateTimeField('cg-to', 'wz.to', endTs)}
       </div>
-      <input type="hidden" id="cg-tender" value="48 hours|48">
-      <p class="faint" style="font-size:11.5px; margin-top:10px;">${t('wz.tenderTip')}</p>
+      <p class="faint" style="font-size:11.5px; margin-top:12px;">${t('wz.tenderTip')}</p>
     </div>
 
     <div class="wizard-section" data-step="6" hidden>
@@ -567,43 +628,62 @@ function renderDocChips(){
     </span>`).join('') : `<span class="faint" style="font-size:12.5px;">${t('wz.noDocs')}</span>`;
 }
 
+// Reads the wizard's step 2 and step 5 inputs into stored-field shape (shared by review and publish).
+function readCargoWizard(){
+  const g = id => (qs('#'+id)?.value || '').trim();
+  const cargoType = g('cg-type');
+  const dg = cargoType === 'DGR' ? 'DG' : g('cg-dg');
+  return {
+    cargoType, cargoTypeOther: cargoType === 'OTHER' ? g('cg-type-other') : '',
+    dg, dgClasses: dg === 'DG' ? pickedValues(qs('.wizard'), 'dg-class').map(Number).sort((a,b)=>a-b) : [],
+    tenderStartsAt: parseLocalDateTime(g('cg-from-date'), g('cg-from-time')),
+    tenderEndsAt: parseLocalDateTime(g('cg-to-date'), g('cg-to-time')),
+  };
+}
+
 function fillCargoReview(){
   const g = id => qs('#'+id)?.value || '';
+  const w = readCargoWizard();
   const box = qs('#cg-review');
   if (!box) return;
   const row = (k, v) => `<div><b>${t(k)}:</b> ${v}</div>`;
   box.innerHTML = `
     <div class="grid-2" style="gap:8px;">
       ${row('rv.route', `${esc(g('cg-origin'))} → ${esc(g('cg-dest'))}`)}
-      ${row('rv.service', esc(tv(g('cg-service'))))}
+      ${row('rv.service', esc(incotermText(g('cg-service'))))}
       ${row('rv.commodity', esc(g('cg-commodity')||'—'))}
-      ${row('rv.type', esc(tv(g('cg-type'))))}
+      ${row('rv.type', esc(cargoTypeText(w) || '—'))}
       ${row('rv.weightVol', `${esc(g('cg-weight')||'—')} ${t('unit.kg')} / ${esc(g('cg-volume')||'—')} ${t('unit.cbm')}`)}
       ${row('rv.pieces', esc(g('cg-pieces')||'—'))}
       ${row('rv.temp', esc(tv(g('cg-temp'))))}
-      ${row('rv.dg', esc(tv(g('cg-dg'))))}
-      ${row('rv.tender', esc(tv(g('cg-tender').split('|')[0])))}
+      ${row('rv.dg', w.dg==='DG' ? esc(tv('DG')) + (w.dgClasses.length ? ' · ' + w.dgClasses.map(n=>t('dg.class',{n})).join(', ') : '') : esc(tv('Non-DG')))}
+      ${row('rv.tender', w.tenderStartsAt && w.tenderEndsAt ? `${fmtDateTime(w.tenderStartsAt)} → ${fmtDateTime(w.tenderEndsAt)}` : '—')}
       ${row('rv.docs', wizardDocs.length || t('rv.none'))}
     </div>`;
 }
 
 async function publishCargo(){
   const g = id => qs('#'+id)?.value || '';
+  const w = readCargoWizard();
   const origin = g('cg-origin'), dest = g('cg-dest');
   const errBox = qs('#wizard-error');
-  if (origin === dest){ errBox.innerHTML = t('wz.errSame'); errBox.classList.remove('hidden'); return; }
-  if (!g('cg-weight') || Number(g('cg-weight')) <= 0){ errBox.innerHTML = t('wz.errWeight'); errBox.classList.remove('hidden'); return; }
+  const fail = key => { errBox.innerHTML = t(key); errBox.classList.remove('hidden'); };
+  if (origin === dest) return fail('wz.errSame');
+  if (!g('cg-weight') || Number(g('cg-weight')) <= 0) return fail('wz.errWeight');
+  if (w.cargoType === 'OTHER' && !w.cargoTypeOther) return fail('wz.errTypeOther');
+  if (w.dg === 'DG' && !w.dgClasses.length) return fail('wz.errDgClass');
+  if (!w.tenderStartsAt || !w.tenderEndsAt) return fail('wz.errWindow');
+  if (w.tenderEndsAt <= w.tenderStartsAt || w.tenderEndsAt <= Date.now()) return fail('wz.errWindowOrder');
   errBox.classList.add('hidden');
 
-  const [tenderLabel, hours] = g('cg-tender').split('|');
   const doc = {
     ownerId: me().id, ownerName: me().companyName,
     origin, destination: dest,
-    commodity: g('cg-commodity'), cargoType: g('cg-type'), hsCode: g('cg-hs'),
+    commodity: g('cg-commodity'), hsCode: g('cg-hs'),
     weightKg: Number(g('cg-weight')||0), volumeCbm: Number(g('cg-volume')||0), pieces: Number(g('cg-pieces')||0),
-    dimensions: g('cg-dim'), tempReq: g('cg-temp'), dg: g('cg-dg'),
+    dimensions: g('cg-dim'), tempReq: g('cg-temp'),
+    ...w,
     service: g('cg-service'), documents: wizardDocs.slice(),
-    tenderWindowLabel: tenderLabel, tenderEndsAt: Date.now() + Number(hours||48)*3600000,
     status: 'open', createdAt: Date.now(),
   };
   const id = await Store.add('cargoRequests', doc);
@@ -615,47 +695,75 @@ async function publishCargo(){
 /* Marketplace (cargo)                                                       */
 /* ---------------------------------------------------------------------- */
 function viewMarketplace(){
-  const rows = openMarketCargo();
+  const f = marketFilters, isCap = f.tab === 'capacity';
+  const cargoRows = marketCargo(), capRows = marketCapacity();
+  const codeOptions = sel => AIRPORTS.map(a=>`<option value="${a.code}" ${sel===a.code?'selected':''}>${a.code} — ${apCity(a)}</option>`).join('');
   return `
   <div class="section-title">
-    <div><h2 style="font-size:19px;">${t('mkt.title')}</h2><p class="muted" style="font-size:13px;">${t('mkt.count',{n:rows.length})}</p></div>
+    <div><h2 style="font-size:19px;">${t('mkt.title')}</h2><p class="muted" style="font-size:13px;">${t('mkt.sub')}</p></div>
+  </div>
+  <div class="chip-select">
+    <button type="button" class="chip ${!isCap?'active':''}" data-action="mkt-tab" data-tab="cargo" aria-pressed="${!isCap}">${t('mkt.tabCargo')} · ${cargoRows.length}</button>
+    <button type="button" class="chip ${isCap?'active':''}" data-action="mkt-tab" data-tab="capacity" aria-pressed="${isCap}">${t('mkt.tabCapacity')} · ${capRows.length}</button>
   </div>
   <div class="card">
-    <div class="grid-3">
-      <div class="field"><label for="mkt-q">${t('mkt.search')}</label><input id="mkt-q" placeholder="${t('mkt.searchPh')}" value="${esc(marketFilters.q)}"></div>
-      <div class="field"><label for="mkt-origin">${t('mkt.origin')}</label><select id="mkt-origin"><option value="">${t('mkt.any')}</option>${AIRPORTS.map(a=>`<option value="${a.code}" ${marketFilters.origin===a.code?'selected':''}>${a.code}</option>`).join('')}</select></div>
-      <div class="field"><label for="mkt-dg">${t('mkt.dg')}</label><select id="mkt-dg"><option value="">${t('mkt.any')}</option>${['DG','Non-DG'].map(v=>`<option value="${v}" ${marketFilters.dg===v?'selected':''}>${tv(v)}</option>`).join('')}</select></div>
+    <div class="filter-grid">
+      <div class="field"><label for="mkt-q">${t('mkt.search')}</label><input id="mkt-q" placeholder="${t(isCap?'mkt.searchCapPh':'mkt.searchPh')}" value="${esc(f.q)}"></div>
+      <div class="field"><label for="mkt-origin">${t('mkt.origin')}</label><select id="mkt-origin"><option value="">${t('mkt.any')}</option>${codeOptions(f.origin)}</select></div>
+      <div class="field"><label for="mkt-dest">${t('mkt.dest')}</label><select id="mkt-dest"><option value="">${t('mkt.any')}</option>${codeOptions(f.dest)}</select></div>
+      ${isCap ? '' : `<div class="field"><label for="mkt-type">${t('mkt.type')}</label>
+        <select id="mkt-type"><option value="">${t('mkt.any')}</option>${cargoTypeOptions(f.type)}</select>
+        <input id="mkt-type-other" data-show-when="#mkt-type=OTHER" ${f.type==='OTHER'?'':'hidden'} placeholder="${t('mkt.typeOtherPh')}" value="${esc(f.typeOther)}" aria-label="${t('mkt.typeOtherPh')}"></div>`}
     </div>
   </div>
-  <div class="card card-flush"><div id="results-list">${marketplaceRows(rows)}</div></div>
+  <div class="card card-flush"><div id="results-list">${isCap ? capacityMarketRows(capRows) : marketplaceRows(cargoRows)}</div></div>
   `;
 }
+function matchesRoute(r, f){ return (!f.origin || r.origin === f.origin) && (!f.dest || r.destination === f.dest); }
 function marketplaceRows(rows){
-  rows = rows || openMarketCargo();
+  rows = rows || marketCargo();
   const f = marketFilters;
   const filtered = rows.filter(r => {
-    if (f.origin && r.origin !== f.origin) return false;
-    if (f.dg && r.dg !== f.dg) return false;
+    if (!matchesRoute(r, f)) return false;
+    if (f.type){
+      const code = cargoTypeCode(r);
+      // "Dangerous goods" also catches requests of any type that are flagged DG.
+      if (f.type === 'DGR' ? !(code === 'DGR' || r.dg === 'DG') : code !== f.type) return false;
+      if (f.type === 'OTHER' && f.typeOther && !cargoTypeText(r).toLowerCase().includes(f.typeOther.toLowerCase())) return false;
+    }
     if (f.q){
-      const hay = `${r.commodity} ${r.origin} ${r.destination} ${r.cargoType} ${tv(r.cargoType)}`.toLowerCase();
+      const hay = `${r.commodity} ${r.origin} ${r.destination} ${r.hsCode||''} ${cargoTypeText(r)} ${r.cargoType}`.toLowerCase();
       if (!hay.includes(f.q.toLowerCase())) return false;
     }
     return true;
   });
   if (!filtered.length) return emptyState(t('mkt.empty'));
   return `<div class="table-wrap"><table>
-    <thead><tr><th>${t('th.route')}</th><th>${t('th.cargo')}</th><th>${t('th.weightVol')}</th><th>${t('th.service')}</th><th>${t('th.dg')}</th><th>${t('th.closes')}</th><th>${t('th.offers')}</th><th></th></tr></thead>
+    <thead><tr><th>${t('th.route')}</th><th>${t('th.cargo')}</th><th>${t('th.type')}</th><th>${t('th.weightVol')}</th><th>${t('th.service')}</th><th>${t('th.closes')}</th><th>${t('th.offers')}</th><th></th></tr></thead>
     <tbody>${filtered.map(r=>`
       <tr style="cursor:pointer;" data-action="nav" data-route="tender" data-id="${esc(r.id)}">
-        <td class="mono">${routeText(r)}</td>
-        <td>${esc(r.commodity||tv(r.cargoType)||'—')}</td>
-        <td class="mono">${r.weightKg||'—'} ${t('unit.kg')} / ${r.volumeCbm||'—'} m³</td>
-        <td>${esc(tv(r.service))}</td>
-        <td>${r.dg==='DG'?`<span class="badge badge-red">${tv('DG')}</span>`:`<span class="badge badge-neutral">${tv('Non-DG')}</span>`}</td>
+        <td class="mono">${routeText(r)}${r.ownerId===me().id ? `<div style="margin-top:4px;">${yoursBadge()}</div>` : ''}</td>
+        <td>${esc(r.commodity||'—')}</td>
+        <td>${esc(cargoTypeText(r))}${r.dg==='DG' ? `<div style="margin-top:4px;">${dgBadge(r)}</div>` : ''}</td>
+        <td class="mono" style="white-space:nowrap;">${r.weightKg||'—'} ${t('unit.kg')} / ${r.volumeCbm||'—'} m³</td>
+        <td class="mono">${esc(incotermShort(r.service))}</td>
         <td class="mono" style="font-size:12px;">${fmtDateTime(r.tenderEndsAt)}</td>
         <td>${offersFor(r.id,'cargo').length}</td>
         <td>${icon('chevron',15)}</td>
       </tr>`).join('')}</tbody></table></div>`;
+}
+function capacityMarketRows(rows){
+  rows = rows || marketCapacity();
+  const f = marketFilters;
+  const filtered = rows.filter(c => {
+    if (!matchesRoute(c, f)) return false;
+    if (f.q){
+      const hay = `${c.origin} ${c.destination} ${c.flightNo||''} ${c.aircraft} ${tv(c.aircraft)} ${c.ownerName}`.toLowerCase();
+      if (!hay.includes(f.q.toLowerCase())) return false;
+    }
+    return true;
+  });
+  return filtered.length ? capacityTable(filtered, false) : emptyState(t('mkt.capEmpty'));
 }
 
 /* ---------------------------------------------------------------------- */
@@ -670,6 +778,10 @@ function viewCargoDetail(id){
   const isOwner = r.ownerId === me().id;
   const offers = offersFor(id,'cargo');
   const myOffer = offers.find(o=>o.providerId===me().id);
+  const notStarted = r.tenderStartsAt && r.tenderStartsAt > Date.now();
+  const windowText = r.tenderStartsAt
+    ? t('cd.windowRange', { from: fmtDateTime(r.tenderStartsAt), to: fmtDateTime(r.tenderEndsAt) })
+    : t('cd.window', { w: tv(r.tenderWindowLabel||'—'), when: fmtDateTime(r.tenderEndsAt) });
 
   return `
   <div class="card">
@@ -682,24 +794,27 @@ function viewCargoDetail(id){
     </div>
     <hr class="divider" style="margin:16px 0;">
     <div class="grid-3" style="font-size:13px;">
-      ${field('cd.commodity', `${esc(r.commodity||'—')} <span class="faint">(${esc(tv(r.cargoType||'—'))})</span>`)}
+      ${field('cd.commodity', `${esc(r.commodity||'—')} <span class="faint">(${esc(cargoTypeText(r))})</span>`)}
       ${field('cd.hs', esc(r.hsCode||'—'), true)}
-      ${field('cd.service', esc(tv(r.service)))}
+      ${field('cd.service', esc(incotermText(r.service)))}
       ${field('cd.weightVol', `${r.weightKg||'—'} ${t('unit.kg')} / ${r.volumeCbm||'—'} m³`, true)}
       ${field('cd.piecesDim', `${r.pieces||'—'} · ${esc(r.dimensions||'—')}`)}
       ${field('cd.temp', esc(tv(r.tempReq||'—')))}
+      ${field('cd.dg', dgDetail(r))}
     </div>
     ${r.documents && r.documents.length ? `<div style="margin-top:14px;"><b class="lbl">${t('cd.docs')}</b>
       <div class="chip-select" style="margin-top:6px;">${r.documents.map(d=>`<span class="chip active" style="cursor:default;">${icon('doc',12)} ${esc(tv(d))}</span>`).join('')}</div></div>` : ''}
     <hr class="divider" style="margin:16px 0;">
     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
-      <span class="faint" style="font-size:12.5px;">${t('cd.window', { w: tv(r.tenderWindowLabel||'—'), when: fmtDateTime(r.tenderEndsAt) })}</span>
+      <span class="faint" style="font-size:12.5px;">${windowText}</span>
       ${isOwner && r.status==='open' ? `<button class="btn btn-soft btn-sm" ${offers.length?'':'disabled'} data-action="close-tender" data-collection="cargoRequests" data-id="${esc(r.id)}">${icon('sparkle',14)} ${t('cd.close')}</button>` : ''}
     </div>
     ${isOwner && r.status==='open' && !offers.length ? `<p class="faint" style="font-size:11.5px; margin-top:6px;">${t('cd.waiting')}</p>` : ''}
   </div>
 
-  ${r.status==='open' && !isOwner && me().role!=='cargo_owner' ? offerFormCard(r, 'cargo', myOffer) : ''}
+  ${r.status==='open' && !isOwner && me().role!=='cargo_owner'
+    ? (notStarted ? `<div class="card"><p class="muted" style="font-size:13px;">${t('cd.notStarted', { when: fmtDateTime(r.tenderStartsAt) })}</p></div>` : offerFormCard(r, 'cargo', myOffer))
+    : ''}
   ${r.status==='open' && !isOwner && myOffer ? `<div class="card"><b style="font-size:13.5px;">${t('of.yours')}</b>${offerSummaryRow(myOffer)}</div>` : ''}
 
   ${(isOwner || r.status!=='open') ? offersPanel(r, offers, isOwner, 'cargo') : (offers.length ? `<div class="card"><p class="muted" style="font-size:13px;">${t('cd.soFar',{n:offers.length})}</p></div>` : '')}
@@ -949,6 +1064,162 @@ function viewCharterDetail(id){
 }
 
 /* ---------------------------------------------------------------------- */
+/* Airline flights & free capacity — list / form / detail                    */
+/* Both kinds live in the `capacity` collection and show in the Cargo        */
+/* Marketplace under "Flights & capacity".                                   */
+/* ---------------------------------------------------------------------- */
+function capKindKey(c){ return c.kind==='space' ? 'cap.kind.space' : c.flightType==='regular' ? 'cap.kind.regular' : 'cap.kind.charter'; }
+function capKindBadge(c){ return `<span class="badge ${c.kind==='space'?'badge-teal':'badge-accent'}">${t(capKindKey(c))}</span>`; }
+function capStatusBadge(c){ return `<span class="badge ${c.status==='active'?'badge-teal':'badge-neutral'}">${t('cap.status.'+c.status)}</span>`; }
+function scheduleText(c){
+  if (c.flightType === 'regular') return `${(c.days||[]).slice().sort((a,b)=>a-b).map(d=>t('dow.'+d)).join(', ')} · ${esc(c.departTime||'')}`;
+  return fmtDateTime(c.departAt);
+}
+function capacityText(c){ return `${Number(c.capacityKg||0).toLocaleString(locale())} ${t('unit.kg')} / ${c.capacityCbm||'—'} m³`; }
+function tempShort(v){ return v === 'Ambient' ? t('temp.ambientShort') : v.split(' (')[0]; }
+
+function capacityTable(list, mine){
+  return `<div class="table-wrap"><table>
+    <thead><tr><th>${t('th.kind')}</th><th>${t('th.route')}</th><th>${t('th.departure')}</th><th>${t('th.aircraftHeight')}</th><th>${t('th.capacity')}</th><th>${t('th.temp')}</th><th>${t(mine?'th.status':'th.carrier')}</th><th></th></tr></thead>
+    <tbody>${list.map(c=>`
+      <tr style="cursor:pointer;" data-action="nav" data-route="capacity-detail" data-id="${esc(c.id)}">
+        <td>${capKindBadge(c)}</td>
+        <td class="mono" style="white-space:nowrap;">${routeText(c)}${c.flightNo ? `<div class="faint" style="font-size:11.5px;">${esc(c.flightNo)}</div>` : ''}</td>
+        <td class="mono" style="font-size:12px; white-space:nowrap;">${scheduleText(c)}</td>
+        <td>${esc(tv(c.aircraft||'—'))}${c.maxHeightCm ? `<div class="faint mono" style="font-size:11.5px;">≤ ${t('cap.unitCm',{n:c.maxHeightCm})}</div>` : ''}</td>
+        <td class="mono" style="white-space:nowrap;">${capacityText(c)}</td>
+        <td style="font-size:12.5px;">${(c.temps||[]).map(v=>esc(tempShort(v))).join(', ') || '—'}</td>
+        <td>${mine ? capStatusBadge(c) : esc(c.ownerName)}${!mine && c.ownerId===me().id ? `<div style="margin-top:4px;">${yoursBadge()}</div>` : ''}</td>
+        <td>${icon('chevron',15)}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+}
+
+function viewCapacityList(){
+  const mine = myCapacity();
+  const isAirline = me().role === 'airline';
+  return `
+  <div class="section-title">
+    <div><h2 style="font-size:19px;">${t('cap.title')}</h2><p class="muted" style="font-size:13px;">${t('cap.sub')}</p></div>
+    ${isAirline ? `<div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <button class="btn btn-primary btn-sm" data-action="nav" data-route="capacity" data-id="new-flight">${icon('plus',15)} ${t('dash.addFlight')}</button>
+      <button class="btn btn-soft btn-sm" data-action="nav" data-route="capacity" data-id="new-space">${icon('plus',15)} ${t('dash.addSpace')}</button>
+    </div>` : ''}
+  </div>
+  <div class="card card-flush">${mine.length ? capacityTable(mine, true) : emptyState(t('cap.empty'))}</div>`;
+}
+
+function viewCapacityForm(kind){
+  if (me().role !== 'airline') return emptyState(t('cap.onlyAirline'));
+  const isFlight = kind === 'flight';
+  const tomorrow = isoDate(Date.now() + 86400000);
+  const myFlights = myCapacity().filter(c => c.kind==='flight' && c.status==='active');
+  const chip = (group, value, label, active) =>
+    `<button type="button" class="chip ${active?'active':''}" data-action="toggle-chip" data-group="${group}" data-value="${esc(value)}" aria-pressed="${!!active}">${label}</button>`;
+  return `
+  <div class="card" style="max-width:760px;">
+    <div class="section-title"><h2 style="font-size:18px;">${t(isFlight?'cap.newFlight':'cap.newSpace')}</h2>
+      <button class="btn btn-ghost btn-sm" data-action="nav" data-route="capacity">${t('wz.cancel')}</button></div>
+    <p class="muted" style="font-size:13px; margin-top:4px;">${t(isFlight?'cap.flightSub':'cap.spaceSub')}</p>
+    <form data-form="publish-capacity" data-kind="${kind}" style="display:flex; flex-direction:column; gap:16px; margin-top:18px;">
+      ${isFlight ? `<div class="field"><label>${t('cap.flightType')}</label>
+        <div class="chip-select" data-chip-group="cap-ftype">
+          <button type="button" class="chip active" data-action="pick-chip" data-group="cap-ftype" data-value="charter" data-target="#cap-ftype">${t('cap.charter')}</button>
+          <button type="button" class="chip" data-action="pick-chip" data-group="cap-ftype" data-value="regular" data-target="#cap-ftype">${t('cap.regular')}</button>
+        </div><input type="hidden" id="cap-ftype" value="charter"></div>`
+      : myFlights.length ? `<div class="field"><label for="cap-from-flight">${t('cap.fromFlight')}</label>
+        <select id="cap-from-flight"><option value="">${t('cap.fromFlightNone')}</option>
+          ${myFlights.map(f=>`<option value="${esc(f.id)}">${routeText(f)}${f.flightNo ? ' · '+esc(f.flightNo) : ''} · ${scheduleText(f)}</option>`).join('')}
+        </select></div>` : ''}
+      <div class="grid-2">
+        <div class="field"><label for="cap-origin">${t('wz.origin')}</label><select id="cap-origin">${airportOptions('TAS')}</select></div>
+        <div class="field"><label for="cap-dest">${t('wz.dest')}</label><select id="cap-dest">${airportOptions('FRA')}</select></div>
+      </div>
+      <div class="grid-2">
+        <div class="field"><label for="cap-flightno">${t('cap.flightNo')}</label><input id="cap-flightno" class="mono" placeholder="${t('cap.flightNoPh')}"></div>
+        <div class="field"><label for="cap-aircraft">${t('cap.aircraft')}</label>
+          <select id="cap-aircraft">${AIRCRAFT_TYPES.map(a=>`<option value="${a}">${tv(a)}</option>`).join('')}</select>
+          <input id="cap-aircraft-other" data-show-when="#cap-aircraft=Other" hidden placeholder="${t('cap.aircraftOtherPh')}" aria-label="${t('cap.aircraftOther')}"></div>
+      </div>
+      ${isFlight ? `<div class="field" data-show-when="#cap-ftype=regular" hidden><label>${t('cap.days')}</label>
+        <div class="chip-select">${[1,2,3,4,5,6,7].map(d => chip('cap-days', d, t('dow.'+d), false)).join('')}</div></div>` : ''}
+      <div class="grid-2">
+        <div class="field" ${isFlight ? 'data-show-when="#cap-ftype=charter"' : ''}><label for="cap-date">${t('cap.date')}</label><input type="date" id="cap-date" min="${isoDate(Date.now())}" value="${tomorrow}"></div>
+        <div class="field"><label for="cap-time">${t('cap.time')}</label><input type="time" id="cap-time" value="10:00"></div>
+      </div>
+      <div class="${isFlight ? 'grid-3' : 'grid-2'}">
+        <div class="field"><label for="cap-kg">${t('cap.kg')}</label><input id="cap-kg" type="number" min="1" placeholder="12000"></div>
+        <div class="field"><label for="cap-cbm">${t('cap.cbm')}</label><input id="cap-cbm" type="number" min="0" step="0.1" placeholder="60"></div>
+        <div class="field"><label for="cap-height">${t(isFlight ? 'cap.height' : 'cap.heightOpt')}</label><input id="cap-height" type="number" min="1" placeholder="160"></div>
+        ${isFlight ? '' : `<div class="field"><label for="cap-rate">${t('cap.rate')}</label><input id="cap-rate" type="number" min="0" step="0.01" placeholder="2.40"></div>`}
+      </div>
+      <div class="field"><label>${t('cap.temps')}</label>
+        <p class="field-hint" style="margin-top:-2px;">${t('cap.tempsHint')}</p>
+        <div class="chip-select">${TEMP_OPTIONS.map((v,i) => chip('cap-temps', v, esc(tv(v)), i===0)).join('')}</div>
+      </div>
+      <div class="field"><label for="cap-notes">${t('cap.notes')}</label><textarea id="cap-notes" placeholder="${t('cap.notesPh')}"></textarea></div>
+      <div id="cap-error" class="badge badge-red hidden" style="align-self:flex-start;"></div>
+      <button class="btn btn-primary" type="submit">${icon('bolt',15)} ${t('cap.publish')}</button>
+    </form>
+  </div>`;
+}
+
+// Free-capacity form: copy route, aircraft and limits from one of the airline's own flights.
+function prefillFromFlight(select){
+  const f = Cache.capacity.find(c => c.id === select.value);
+  const form = select.closest('form');
+  if (!f || !form) return;
+  const set = (id, v) => { const n = qs('#'+id, form); if (n && v !== undefined && v !== null && v !== '') n.value = v; };
+  set('cap-origin', f.origin); set('cap-dest', f.destination); set('cap-flightno', f.flightNo);
+  if (AIRCRAFT_TYPES.includes(f.aircraft)) set('cap-aircraft', f.aircraft);
+  else { set('cap-aircraft', 'Other'); set('cap-aircraft-other', f.aircraft); }
+  set('cap-height', f.maxHeightCm);
+  if (f.departAt){ set('cap-date', isoDate(f.departAt)); set('cap-time', isoTime(f.departAt)); }
+  else set('cap-time', f.departTime);
+  qsa('[data-group="cap-temps"]', form).forEach(b => {
+    const on = (f.temps||[]).includes(b.dataset.value);
+    b.classList.toggle('active', on); b.setAttribute('aria-pressed', String(on));
+  });
+}
+
+function viewCapacityDetail(id){
+  const c = Cache.capacity.find(x => x.id === id);
+  if (!c) return emptyState(t('cap.notFound'));
+  const isOwner = c.ownerId === me().id;
+  return `
+  <div class="card">
+    <div class="section-title">
+      <div><span class="eyebrow">${t(capKindKey(c))}</span>
+        <h2 style="font-size:22px; margin-top:4px;" class="mono">${routeText(c)}</h2>
+        <p class="muted" style="font-size:13px; margin-top:4px;">${t('cap.meta', { from: airportLabel(c.origin), to: airportLabel(c.destination), owner: c.ownerName })}</p>
+      </div>
+      ${capStatusBadge(c)}
+    </div>
+    <hr class="divider" style="margin:16px 0;">
+    <div class="grid-3" style="font-size:13px;">
+      ${field('cap.departure', scheduleText(c), true)}
+      ${field('cap.flightNoLbl', esc(c.flightNo||'—'), true)}
+      ${field('cap.aircraft', esc(tv(c.aircraft||'—')))}
+      ${field('cap.capacity', capacityText(c), true)}
+      ${field('cap.maxHeight', c.maxHeightCm ? t('cap.unitCm',{n:c.maxHeightCm}) : '—', true)}
+      ${c.kind==='space' ? field('cap.rateLbl', c.ratePerKg ? t('cap.perKg', { price: { __html: '$' + Number(c.ratePerKg).toFixed(2) } }) : t('cap.rateOnRequest'), true) : ''}
+    </div>
+    <div style="margin-top:14px; font-size:13px;">${field('cap.temps', (c.temps||[]).map(v=>esc(tv(v))).join('<br>') || '—')}</div>
+    ${c.notes ? `<div style="margin-top:14px; font-size:13px;">${field('cap.notesLbl', esc(c.notes))}</div>` : ''}
+    ${isOwner && c.status==='active' ? `<hr class="divider" style="margin:16px 0;">
+      <button class="btn btn-ghost btn-sm" data-action="close-capacity" data-id="${esc(c.id)}">${icon('close',14)} ${t('cap.close')}</button>` : ''}
+  </div>
+  ${!isOwner && c.status==='active' ? `<div class="card">
+    <b style="font-size:14.5px;">${t('cap.reqTitle')}</b>
+    <p class="faint" style="font-size:12px; margin-top:4px;">${t('cap.reqHint')}</p>
+    <form data-form="request-capacity" data-id="${esc(c.id)}" style="display:flex; flex-direction:column; gap:14px; margin-top:14px;">
+      <div class="field"><label for="cr-kg">${t('cap.reqKg')}</label><input id="cr-kg" type="number" min="1" required placeholder="800"></div>
+      <div class="field"><label for="cr-note">${t('cap.reqNote')}</label><textarea id="cr-note" placeholder="${t('cap.reqNotePh')}"></textarea></div>
+      <button class="btn btn-primary" type="submit" style="align-self:flex-start;">${icon('send',15)} ${t('cap.reqSubmit')}</button>
+    </form>
+  </div>` : ''}`;
+}
+
+/* ---------------------------------------------------------------------- */
 /* Contracts                                                                  */
 /* ---------------------------------------------------------------------- */
 function viewContracts(){
@@ -1066,6 +1337,25 @@ function afterRenderAppShell(){
   if (Router.route.params.id === 'new' && Router.route.name === 'my-cargo') renderDocChips();
 }
 
+// Blocks marked data-show-when="#control-id=value[|value…]" are shown only while that control has one of the values.
+function syncShowWhen(){
+  qsa('[data-show-when]').forEach(node => {
+    const [sel, vals] = node.dataset.showWhen.split('=');
+    const ctl = qs(sel);
+    node.hidden = !ctl || !vals.split('|').includes(ctl.value);
+  });
+}
+function selectChip(chip){
+  const group = chip.closest('[data-chip-group]') || chip.closest('.chip-select');
+  qsa('[data-action="pick-chip"]', group).forEach(c => c.classList.remove('active'));
+  chip.classList.add('active');
+  const target = qs(chip.dataset.target);
+  if (target) target.value = chip.dataset.value;
+  // Keep the cargo type and the DG toggle consistent: a non-DG request can't stay typed as DGR.
+  if (chip.dataset.group === 'dg' && chip.dataset.value === 'Non-DG'){ const ty = qs('#cg-type'); if (ty && ty.value === 'DGR') ty.value = 'GEN'; }
+  syncShowWhen();
+}
+
 /* ---------------------------------------------------------------------- */
 /* Global event delegation                                                   */
 /* ---------------------------------------------------------------------- */
@@ -1110,14 +1400,14 @@ function onGlobalClick(e){
     }
     case 'chat-suggest': sendChat(el.dataset.q); break;
 
-    case 'pick-chip': {
-      const group = el.closest('.chip-select');
-      qsa('.chip', group).forEach(c => c.classList.remove('active'));
-      el.classList.add('active');
-      const target = qs(el.dataset.target);
-      if (target) target.value = el.dataset.value;
+    case 'pick-chip': selectChip(el); break;
+    case 'toggle-chip': {
+      const on = !el.classList.contains('active');
+      el.classList.toggle('active', on);
+      el.setAttribute('aria-pressed', String(on));
       break;
     }
+    case 'mkt-tab': marketFilters.tab = el.dataset.tab; render(); break;
 
     case 'add-doc-chip': if (!wizardDocs.includes(el.dataset.name)) wizardDocs.push(el.dataset.name); renderDocChips(); break;
     case 'remove-doc-chip': wizardDocs = wizardDocs.filter(n => n !== el.dataset.name); renderDocChips(); break;
@@ -1138,6 +1428,7 @@ function onGlobalClick(e){
     case 'publish-cargo': publishCargo(); break;
 
     case 'close-tender': Store.update(el.dataset.collection, el.dataset.id, { status:'closed' }); toast(t('toast.closed')); break;
+    case 'close-capacity': Store.update('capacity', el.dataset.id, { status:'closed' }); toast(t('toast.capClosed')); break;
 
     case 'select-provider': {
       const collection = el.dataset.collection, reqId = el.dataset.id, offerId = el.dataset.offerId;
@@ -1229,6 +1520,54 @@ function onGlobalSubmit(e){
     return;
   }
 
+  if (kind === 'publish-capacity'){
+    const g = id => (qs('#'+id, form)?.value || '').trim();
+    const err = qs('#cap-error', form);
+    const fail = key => { err.innerHTML = t(key); err.classList.remove('hidden'); };
+    const listKind = form.dataset.kind;
+    const flightType = listKind === 'flight' ? g('cap-ftype') : null;
+    const regular = flightType === 'regular';
+    const aircraft = g('cap-aircraft') === 'Other' ? g('cap-aircraft-other') : g('cap-aircraft');
+    const days = pickedValues(form, 'cap-days').map(Number);
+    const temps = pickedValues(form, 'cap-temps');
+    const departAt = regular ? null : parseLocalDateTime(g('cap-date'), g('cap-time'));
+    if (g('cap-origin') === g('cap-dest')) return fail('wz.errSame');
+    if (!aircraft) return fail('cap.errAircraft');
+    if (regular ? (!days.length || !g('cap-time')) : (!departAt || departAt <= Date.now())) return fail(regular ? 'cap.errDays' : 'cap.errDate');
+    if (!(Number(g('cap-kg')) > 0)) return fail('cap.errKg');
+    if (listKind === 'flight' && !(Number(g('cap-height')) > 0)) return fail('cap.errHeight');
+    if (!temps.length) return fail('cap.errTemp');
+    err.classList.add('hidden');
+    (async () => {
+      const id = await Store.add('capacity', {
+        kind: listKind, ownerId: me().id, ownerName: me().companyName,
+        flightType, flightNo: g('cap-flightno'), flightId: g('cap-from-flight') || null,
+        origin: g('cap-origin'), destination: g('cap-dest'),
+        departAt, days: regular ? days : [], departTime: regular ? g('cap-time') : '',
+        aircraft, capacityKg: Number(g('cap-kg')), capacityCbm: Number(g('cap-cbm')) || 0,
+        maxHeightCm: Number(g('cap-height')) || 0, temps,
+        ratePerKg: Number(g('cap-rate')) || 0, notes: g('cap-notes'),
+        status: 'active', createdAt: Date.now(),
+      });
+      toast(t('toast.capPublished'));
+      Router.go('capacity-detail', id);
+    })();
+    return;
+  }
+
+  if (kind === 'request-capacity'){
+    const c = Cache.capacity.find(x => x.id === form.dataset.id);
+    const kg = Number(qs('#cr-kg', form).value), note = qs('#cr-note', form).value.trim();
+    if (!c || !(kg > 0)) return;
+    (async () => {
+      await notify(c.ownerId, note ? 'n.capRequestNote' : 'n.capRequest',
+        { company: me().companyName, kg: kg.toLocaleString(locale()), route: routeText(c), note });
+      toast(t('toast.capRequested'));
+      form.reset();
+    })();
+    return;
+  }
+
   if (kind === 'chat'){
     const input = qs('#chat-input', form);
     sendChat(input.value);
@@ -1239,14 +1578,20 @@ function onGlobalSubmit(e){
 
 function onGlobalInput(e){
   if (e.target.id === 'mkt-q'){ marketFilters.q = e.target.value; refreshMarketList(); }
+  if (e.target.id === 'mkt-type-other'){ marketFilters.typeOther = e.target.value; refreshMarketList(); }
 }
 function onGlobalChange(e){
   if (e.target.id === 'mkt-origin'){ marketFilters.origin = e.target.value; refreshMarketList(); }
-  if (e.target.id === 'mkt-dg'){ marketFilters.dg = e.target.value; refreshMarketList(); }
+  if (e.target.id === 'mkt-dest'){ marketFilters.dest = e.target.value; refreshMarketList(); }
+  if (e.target.id === 'mkt-type'){ marketFilters.type = e.target.value; refreshMarketList(); }
+  // Choosing "Dangerous Goods (DGR)" as the cargo type switches the DG toggle on and reveals the classes.
+  if (e.target.id === 'cg-type' && e.target.value === 'DGR'){ const chip = qs('[data-group="dg"][data-value="DG"]'); if (chip) selectChip(chip); }
+  if (e.target.id === 'cap-from-flight') prefillFromFlight(e.target);
+  if (e.target.tagName === 'SELECT') syncShowWhen();
   if (e.target.id === 'cg-files'){
     Array.from(e.target.files || []).forEach(f => { if (!wizardDocs.includes(f.name)) wizardDocs.push(f.name); });
     e.target.value = '';
     renderDocChips();
   }
 }
-function refreshMarketList(){ const c = qs('#results-list'); if (c) c.innerHTML = marketplaceRows(); }
+function refreshMarketList(){ const c = qs('#results-list'); if (c) c.innerHTML = marketFilters.tab === 'capacity' ? capacityMarketRows() : marketplaceRows(); }
